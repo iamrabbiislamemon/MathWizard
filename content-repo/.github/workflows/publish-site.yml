@@ -1,0 +1,83 @@
+# Copy this file into the CONTENT repository (the one with the .md files), at
+# .github/workflows/publish-site.yml. After every push that changes Markdown it:
+#   1. asks the site repository to rebuild and republish GitHub Pages, and
+#   2. if the site also runs on a Next.js server, tells that server which pages
+#      changed by calling its /api/revalidate endpoint (skipped unless REVALIDATE_URL is set).
+#
+# One-time setup in the content repository, Settings → Secrets and variables → Actions:
+#   Variables tab:
+#     SITE_REPOSITORY       the site's repository as owner/name, e.g. octocat/my-site     (1)
+#     REVALIDATE_URL        e.g. https://example.com/api/revalidate                      (2)
+#   Secrets tab:
+#     SITE_DISPATCH_TOKEN   fine-grained personal access token with Contents: Read and
+#                           write on the site repository, which lets it start that
+#                           repository's deploy workflow                                 (1)
+#     WEBHOOK_SECRET        the same value as WEBHOOK_SECRET on the server               (2)
+#
+# Step 2 replaces the repository webhook from app/api/revalidate/route.js; set up one or
+# the other, not both.
+name: Publish site
+
+on:
+  push:
+    branches: [main] # the branch the site publishes (CONTENT_BRANCH / GITHUB_BRANCH)
+    paths: ['**.md']
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild-pages:
+    if: vars.SITE_REPOSITORY != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start the site's GitHub Pages deployment
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: gh api "repos/$SITE_REPOSITORY/dispatches" -f event_type=content-updated
+
+  revalidate-server:
+    if: vars.REVALIDATE_URL != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send the changed pages to the Next.js server
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVALIDATE_URL: ${{ vars.REVALIDATE_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+
+          # The push payload Actions receives leaves out each commit's added/modified/removed
+          # file lists, so rebuild them from the compare API. It lists at most 300 files;
+          # beyond that, the server is told to refresh every page.
+          files='{"added":[],"modified":[],"removed":[],"truncated":false}'
+          if [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            # shellcheck disable=SC2016 # $files is a jq variable, not a shell one
+            files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" --jq '
+              .files as $files | {
+                added: [$files[] | select(.status == "added" or .status == "copied" or .status == "renamed") | .filename],
+                modified: [$files[] | select(.status == "modified" or .status == "changed") | .filename],
+                removed: ([$files[] | select(.status == "removed") | .filename]
+                  + [$files[] | select(.status == "renamed") | .previous_filename]),
+                truncated: ($files | length >= 300)
+              }')
+          fi
+
+          # Same shape and signature as a GitHub push webhook, so the endpoint handles both.
+          payload=$(jq -c --argjson files "$files" '{
+            ref, before, after, created, deleted,
+            forced: (.forced or $files.truncated),
+            repository: { full_name: .repository.full_name },
+            commits: [$files | del(.truncated)]
+          }' "$GITHUB_EVENT_PATH")
+          signature="sha256=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')"
+
+          curl --fail-with-body --silent --show-error -X POST "$REVALIDATE_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -H "X-Hub-Signature-256: $signature" \
+            --data "$payload"

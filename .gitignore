@@ -1,0 +1,10 @@
+/node_modules
+/.next/
+/out/
+
+# Environment files hold secrets; only .env.example is committed.
+.env
+.env*.local
+
+npm-debug.log*
+.DS_Store

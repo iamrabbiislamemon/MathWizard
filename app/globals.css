@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* Tailwind only generates classes it finds in source files. This one comes from the
+   rendered Markdown (the visually hidden "Footnotes" heading), so list it explicitly. */
+@source inline("sr-only");
+
+/* Unlayered on purpose so these override the typography plugin's `prose` styles. */
+
+/* GitHub-style task lists: checkboxes replace the bullets. */
+.prose .contains-task-list {
+  list-style: none;
+  padding-inline-start: 0;
+}
+.prose .task-list-item input {
+  margin: 0 0.5em 0 0;
+  vertical-align: middle;
+}
+
+/* Set footnotes apart from the article body. */
+.prose .footnotes {
+  margin-top: 3em;
+  border-top: 1px solid var(--tw-prose-hr);
+  font-size: 0.875em;
+}
+
+/* Wide tables scroll sideways instead of widening the page on small screens. */
+.prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}

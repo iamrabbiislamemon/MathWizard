@@ -1,0 +1,78 @@
+# Builds the site as static files and publishes it to GitHub Pages.
+#
+# Runs on pushes to this repository, when started by hand (Actions tab → Run workflow),
+# and when the content repository's workflow reports new content
+# (content-repo/.github/workflows/publish-site.yml sends a "content-updated" event).
+#
+# One-time setup in THIS repository (the site's code):
+#   1. Settings → Pages → Build and deployment → Source: "GitHub Actions".
+#   2. Settings → Secrets and variables → Actions → Variables tab:
+#        CONTENT_OWNER    owner of the content repository                   (required)
+#        CONTENT_REPO     name of the content repository                    (required)
+#        CONTENT_BRANCH   branch to publish                                 (default: main)
+#        CONTENT_DIR      folder holding the .md files                      (default: repository root)
+#   3. Secrets tab → CONTENT_TOKEN: a fine-grained personal access token with
+#      Contents: Read-only on the content repository. Required if that repository is
+#      private; for a public one the workflow's own token is used when it's missing.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  repository_dispatch:
+    types: [content-updated]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. A newer run waits rather than cancelling one mid-deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      - run: npm ci
+
+      # Don't restore .next/cache from earlier runs: it holds the fetched Markdown,
+      # and reusing it would publish old versions of the pages.
+      - name: Build static site
+        run: npm run build
+        env:
+          STATIC_EXPORT: 'true'
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          GITHUB_TOKEN: ${{ secrets.CONTENT_TOKEN || github.token }}
+          GITHUB_OWNER: ${{ vars.CONTENT_OWNER }}
+          GITHUB_REPO: ${{ vars.CONTENT_REPO }}
+          GITHUB_BRANCH: ${{ vars.CONTENT_BRANCH || 'main' }}
+          GITHUB_CONTENT_DIR: ${{ vars.CONTENT_DIR }}
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
